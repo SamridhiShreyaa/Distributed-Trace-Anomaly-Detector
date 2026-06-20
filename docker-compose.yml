@@ -1,0 +1,123 @@
+version: '3.8'
+
+services:
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:latest
+    ports:
+      - "4317:4317"  # OTLP gRPC receiver
+      - "4318:4318"  # OTLP HTTP receiver
+      - "13133:13133" # Health check
+    volumes:
+      - ./deploy/otel-collector-config.yaml:/etc/otel-collector-config.yaml
+    command: ["--config=/etc/otel-collector-config.yaml"]
+    networks:
+      - trace-network
+
+  sqlite:
+    image: keinos/sqlite3:latest
+    volumes:
+      - ./data/traces.db:/data/traces.db
+    networks:
+      - trace-network
+
+  detector:
+    build:
+      context: .
+      dockerfile: deploy/docker/Dockerfile.detector
+    ports:
+      - "8080:8080"  # gRPC + REST API
+    environment:
+      - OTEL_COLLECTOR_HOST=otel-collector
+      - OTEL_COLLECTOR_PORT=4317
+      - STORAGE_TYPE=sqlite
+      - STORAGE_PATH=/data/traces.db
+    depends_on:
+      - otel-collector
+    volumes:
+      - ./data:/data
+    networks:
+      - trace-network
+
+  auth-service:
+    build:
+      context: .
+      dockerfile: deploy/docker/Dockerfile.demo-service
+      args:
+        SERVICE: auth
+    environment:
+      - SERVICE_NAME=auth
+      - SERVICE_PORT=8081
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+    depends_on:
+      - otel-collector
+    networks:
+      - trace-network
+
+  cart-service:
+    build:
+      context: .
+      dockerfile: deploy/docker/Dockerfile.demo-service
+      args:
+        SERVICE: cart
+    environment:
+      - SERVICE_NAME=cart
+      - SERVICE_PORT=8082
+      - UPSTREAM_AUTH_URL=http://auth-service:8081
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+    depends_on:
+      - auth-service
+      - otel-collector
+    networks:
+      - trace-network
+
+  inventory-service:
+    build:
+      context: .
+      dockerfile: deploy/docker/Dockerfile.demo-service
+      args:
+        SERVICE: inventory
+    environment:
+      - SERVICE_NAME=inventory
+      - SERVICE_PORT=8083
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+    depends_on:
+      - otel-collector
+    networks:
+      - trace-network
+
+  payment-service:
+    build:
+      context: .
+      dockerfile: deploy/docker/Dockerfile.demo-service
+      args:
+        SERVICE: payment
+    environment:
+      - SERVICE_NAME=payment
+      - SERVICE_PORT=8084
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+    depends_on:
+      - otel-collector
+    networks:
+      - trace-network
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_SECURITY_ADMIN_USER=admin
+    volumes:
+      - ./deploy/grafana/datasources.yaml:/etc/grafana/provisioning/datasources/datasources.yaml
+      - ./deploy/grafana/dashboards/:/etc/grafana/provisioning/dashboards/
+    depends_on:
+      - detector
+    networks:
+      - trace-network
+
+networks:
+  trace-network:
+    driver: bridge
+
+volumes:
+  data:
