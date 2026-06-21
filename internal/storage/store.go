@@ -2,7 +2,6 @@ package storage
 
 import (
 	"context"
-	"time"
 )
 
 // Store is the interface for storing and retrieving trace data
